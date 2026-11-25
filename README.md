@@ -1,6 +1,7 @@
 # Product Hunt outreach agent (Vercel Cron + Resend) - stateless
 
-Daily: fetch yesterday's PH launches -> scrape site for contact email -> Claude scores fit and drafts a pitch -> Resend sends (or emails you a dry-run digest). No database, no Redis, nothing stored.
+Daily: fetch yesterday's PH launches -> scrape site for contact email -> Claude scores fit and drafts a pitch -> Resend sends (or emails you a dry-run digest). No database, no Redis, nothing sto
+red.
 
 ## Deploy
 1. `npm i`, `vercel link`
