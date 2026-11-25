@@ -1,22 +1,70 @@
-const PATHS = ["/contact", "/about", "/team", "/privacy", "/terms"];
-const UA = "Mozilla/5.0 (compatible; OutreachBot/1.0)";
+const PATHS = ["/contact", "/contact-us", "/about", "/about-us", "/team", "/company", "/support", "/privacy", "/terms"];
+const UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const HEADERS = {
+  "User-Agent": UA,
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+};
 
 const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi;
 const FILE_EXT = /\.(png|jpe?g|gif|svg|webp|avif|css|js|woff2?|ico)$/i;
-const BAD_LOCAL = /^(no-?reply|do-?not-?reply|abuse|postmaster|privacy|legal|dmarc|unsubscribe|mailer-daemon|sentry|webmaster|security|dpo|gdpr)/i;
+const BAD_LOCAL =
+  /^(no-?reply|do-?not-?reply|abuse|postmaster|privacy|legal|dmarc|unsubscribe|mailer-daemon|sentry|webmaster|security|dpo|gdpr)/i;
 const GENERIC = /^(hello|hi|hey|contact|info|support|team|help|sales|admin|office|press|hola)$/i;
 const BAD_DOMAINS = new Set(["example.com", "domain.com", "email.com", "sentry.io", "yourdomain.com", "wixpress.com"]);
 
 export type Contact = { email: string; source: string; text: string };
+
+function log(website: string, reason: string) {
+  console.log(JSON.stringify({ event: "finder", website, reason }));
+}
+
+function stripTracking(u: string): string {
+  try {
+    const x = new URL(u);
+    for (const k of [...x.searchParams.keys()]) {
+      if (k.startsWith("utm_") || k === "ref") x.searchParams.delete(k);
+    }
+    return x.toString();
+  } catch {
+    return u;
+  }
+}
+
+// Product Hunt gives a producthunt.com/r/... redirect link. Follow the redirect by hand
+// (without loading any PH page) until we reach the startup's real site.
+async function resolveWebsite(url: string): Promise<string | null> {
+  let current = url;
+  for (let i = 0; i < 6; i++) {
+    let host: string;
+    try {
+      host = new URL(current).hostname;
+    } catch {
+      return null;
+    }
+    if (!/(^|\.)producthunt\.com$/.test(host)) return stripTracking(current);
+    try {
+      const r = await fetch(current, { redirect: "manual", signal: AbortSignal.timeout(8000), headers: HEADERS });
+      const loc = r.headers.get("location");
+      if (!loc) return null;
+      current = new URL(loc, current).toString();
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
 
 async function get(url: string): Promise<{ html: string; finalUrl: string } | null> {
   try {
     const r = await fetch(url, {
       redirect: "follow",
       signal: AbortSignal.timeout(8000),
-      headers: { "User-Agent": UA, Accept: "text/html" },
+      headers: HEADERS,
     });
-    if (!r.ok || !(r.headers.get("content-type") ?? "").includes("text/html")) return null;
+    const type = r.headers.get("content-type") ?? "";
+    if (!r.ok || (type && !type.includes("html"))) return null;
     return { html: (await r.text()).slice(0, 1_500_000), finalUrl: r.url };
   } catch {
     return null;
@@ -54,7 +102,11 @@ function extract(html: string, found: Map<string, { mailto: boolean; page: strin
     found.set(email, { mailto: mailto || !!prev?.mailto, page: prev?.page ?? page });
   };
   for (const m of html.matchAll(/mailto:([^"'?\s<>]+)/gi)) {
-    try { add(decodeURIComponent(m[1]), true); } catch { add(m[1], true); }
+    try {
+      add(decodeURIComponent(m[1]), true);
+    } catch {
+      add(m[1], true);
+    }
   }
   for (const m of html.matchAll(/data-cfemail="([0-9a-f]+)"/gi)) add(decodeCf(m[1]), true);
   const deobf = html
@@ -64,19 +116,43 @@ function extract(html: string, found: Map<string, { mailto: boolean; page: strin
 }
 
 export async function findContact(website: string): Promise<Contact | null> {
-  const home = await get(website);
-  if (!home) return null;
+  const site = await resolveWebsite(website);
+  if (!site) {
+    log(website, "could not resolve PH redirect to real site");
+    return null;
+  }
+
+  let home = await get(site);
+  if (!home) {
+    // retry with/without www
+    try {
+      const u = new URL(site);
+      u.hostname = u.hostname.startsWith("www.") ? u.hostname.slice(4) : "www." + u.hostname;
+      home = await get(u.toString());
+    } catch {
+      /* ignore */
+    }
+  }
+  if (!home) {
+    log(site, "homepage fetch failed (blocked, timeout, or non-HTML)");
+    return null;
+  }
+
   const origin = new URL(home.finalUrl).origin;
   const siteRoot = rootDomain(new URL(home.finalUrl).hostname);
 
   const others = await Promise.all(PATHS.map((p) => get(origin + p)));
-  const pages = [{ path: "/", html: home.html }, ...others.map((o, i) => (o ? { path: PATHS[i], html: o.html } : null))].filter(
-    Boolean,
-  ) as { path: string; html: string }[];
+  const pages = [
+    { path: "/", html: home.html },
+    ...others.map((o, i) => (o ? { path: PATHS[i], html: o.html } : null)),
+  ].filter(Boolean) as { path: string; html: string }[];
 
   const found = new Map<string, { mailto: boolean; page: string }>();
   for (const p of pages) extract(p.html, found, p.path);
-  if (found.size === 0) return null;
+  if (found.size === 0) {
+    log(site, `no email found on ${pages.length} page(s)`);
+    return null;
+  }
 
   const scored = [...found.entries()].map(([email, meta]) => {
     const [local, domain] = email.split("@");
@@ -86,7 +162,10 @@ export async function findContact(website: string): Promise<Contact | null> {
   scored.sort((a, b) => b.score - a.score);
   const best = scored[0];
   // Reject addresses on unrelated domains (e.g. a third-party widget's support address)
-  if (best.score < 10 && !/gmail\.com|outlook\.com|proton\.me|protonmail\.com/.test(best.email)) return null;
+  if (best.score < 10 && !/gmail\.com|outlook\.com|proton\.me|protonmail\.com/.test(best.email)) {
+    log(site, `only off-domain emails found (${best.email})`);
+    return null;
+  }
 
   return {
     email: best.email,
