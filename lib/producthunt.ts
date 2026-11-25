@@ -8,12 +8,13 @@ export type Launch = {
   website: string;
   url: string;
   votesCount: number;
+  productLinks?: { type: string; url: string }[];
 };
 
 const QUERY = `
 query($after: DateTime!, $before: DateTime!, $first: Int!) {
   posts(postedAfter: $after, postedBefore: $before, order: VOTES, first: $first) {
-    edges { node { id name tagline description website url votesCount } }
+    edges { node { id name tagline description website url votesCount productLinks { type url } } }
   }
 }`;
 
@@ -51,7 +52,12 @@ export async function fetchLaunches(window: { after: string; before: string }, f
     throw new Error(`Product Hunt API: ${JSON.stringify(json.errors)}`);
   }
 
-  const launches: Launch[] = json.data.posts.edges.map((e: any) => e.node as Launch);
+  const launches: Launch[] = json.data.posts.edges.map((e: any) => {
+    const l = e.node as Launch;
+    // Prefer a direct WEBSITE link (not a producthunt.com redirect) if the API provides one
+    const direct = (l.productLinks ?? []).find((p) => p.type === "WEBSITE" && !/producthunt\.com/i.test(p.url));
+    return direct ? { ...l, website: direct.url } : l;
+  });
   console.log(
     JSON.stringify({
       event: "ph_fetch",
