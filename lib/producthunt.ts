@@ -34,12 +34,31 @@ export async function fetchLaunches(window: { after: string; before: string }, f
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${env("PH_TOKEN")}`,
+      Authorization: `Bearer ${env("PH_TOKEN").trim()}`,
     },
     body: JSON.stringify({ query: QUERY, variables: { ...window, first } }),
   });
-  if (!res.ok) throw new Error(`Product Hunt API ${res.status}: ${await res.text()}`);
-  const json: any = await res.json();
-  if (json.errors) throw new Error(`Product Hunt API: ${JSON.stringify(json.errors)}`);
-  return json.data.posts.edges.map((e: any) => e.node as Launch);
+
+  const raw = await res.text();
+  if (!res.ok) {
+    console.log(JSON.stringify({ event: "ph_fetch", status: res.status, body: raw.slice(0, 300) }));
+    throw new Error(`Product Hunt API ${res.status}: ${raw.slice(0, 300)}`);
+  }
+
+  const json: any = JSON.parse(raw);
+  if (json.errors) {
+    console.log(JSON.stringify({ event: "ph_fetch", errors: json.errors }));
+    throw new Error(`Product Hunt API: ${JSON.stringify(json.errors)}`);
+  }
+
+  const launches: Launch[] = json.data.posts.edges.map((e: any) => e.node as Launch);
+  console.log(
+    JSON.stringify({
+      event: "ph_fetch",
+      window,
+      count: launches.length,
+      sample: launches.slice(0, 3).map((l) => ({ name: l.name, website: l.website })),
+    }),
+  );
+  return launches;
 }
