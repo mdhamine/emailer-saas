@@ -68,6 +68,7 @@ export async function GET(req: Request): Promise<Response> {
         name: l.name,
         votes: l.votesCount,
         website: l.website,
+        resolved: l.websiteResolved,
         productLinks: l.productLinks,
         ...(check && l.id in emails ? { email: emails[l.id] } : {}),
       })),
