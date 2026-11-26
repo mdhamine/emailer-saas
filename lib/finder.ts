@@ -32,23 +32,62 @@ function stripTracking(u: string): string {
   }
 }
 
-// Product Hunt gives a producthunt.com/r/... redirect link. Follow the redirect by hand
-// (without loading any PH page) until we reach the startup's real site.
-async function resolveWebsite(url: string): Promise<string | null> {
-  let current = url;
-  for (let i = 0; i < 6; i++) {
-    let host: string;
+const PH_HOST = /(^|\.)producthunt\.com$/i;
+
+function isPH(u: string): boolean {
+  try {
+    return PH_HOST.test(new URL(u).hostname);
+  } catch {
+    return false;
+  }
+}
+
+// Pull a non-Product-Hunt URL out of a redirect page body (meta refresh, JS redirect, or a plain link).
+function urlFromBody(body: string, base: string): string | null {
+  const patterns = [
+    /http-equiv=["']refresh["'][^>]*content=["'][^"']*url=([^"'>\s]+)/i,
+    /(?:window\.)?location(?:\.href)?\s*=\s*["']([^"']+)["']/i,
+    /location\.replace\(\s*["']([^"']+)["']\s*\)/i,
+    /<a[^>]+href=["'](https?:\/\/[^"']+)["']/i,
+  ];
+  for (const re of patterns) {
+    const m = body.match(re);
+    if (!m) continue;
     try {
-      host = new URL(current).hostname;
+      const abs = new URL(m[1].replace(/&amp;/g, "&"), base).toString();
+      if (!isPH(abs)) return abs;
     } catch {
-      return null;
+      /* try next pattern */
     }
-    if (!/(^|\.)producthunt\.com$/.test(host)) return stripTracking(current);
+  }
+  return null;
+}
+
+// Product Hunt gives a producthunt.com/r/... redirect link. Follow the redirect by hand
+// until we reach the startup's real site. Never returns a producthunt.com URL.
+export async function resolveWebsite(url: string): Promise<string | null> {
+  let current = url;
+  for (let i = 0; i < 8; i++) {
+    if (!isPH(current)) {
+      try {
+        new URL(current);
+      } catch {
+        return null;
+      }
+      return stripTracking(current);
+    }
     try {
       const r = await fetch(current, { redirect: "manual", signal: AbortSignal.timeout(8000), headers: HEADERS });
       const loc = r.headers.get("location");
-      if (!loc) return null;
-      current = new URL(loc, current).toString();
+      if (loc) {
+        current = new URL(loc, current).toString();
+        continue;
+      }
+      // No Location header: the redirect may be done in the HTML body instead.
+      const body = (await r.text()).slice(0, 200_000);
+      const fromBody = urlFromBody(body, current);
+      if (!fromBody) return null;
+      current = fromBody;
     } catch {
       return null;
     }
@@ -117,7 +156,7 @@ function extract(html: string, found: Map<string, { mailto: boolean; page: strin
 
 export async function findContact(website: string): Promise<Contact | null> {
   const site = await resolveWebsite(website);
-  if (!site) {
+  if (!site || isPH(site)) {
     log(website, "could not resolve PH redirect to real site");
     return null;
   }
