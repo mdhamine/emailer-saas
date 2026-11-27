@@ -19,7 +19,7 @@ function replyAddress(): string {
 }
 
 function footer(): string {
-  return `\n\n--\n${env("SENDER_NAME")}\n${env("POSTAL_ADDRESS")}\n\nNot interested? Just reply "unsubscribe" and I won't email you again.`;
+  return `\n\n--\n${env("SENDER_NAME")}\n\nNot interested? Just reply "unsubscribe" and I won't email you again.`;
 }
 
 export async function sendPitch(d: Draft): Promise<string> {
