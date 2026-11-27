@@ -18,20 +18,13 @@ function replyAddress(): string {
   return process.env.REPLY_TO || env("FROM_EMAIL");
 }
 
-function footer(): string {
-  return `\n\n--\n${env("SENDER_NAME")}\n\nNot interested? Just reply "unsubscribe" and I won't email you again.`;
-}
-
 export async function sendPitch(d: Draft): Promise<string> {
   const { data, error } = await resend.emails.send({
     from: `${env("SENDER_NAME")} <${env("FROM_EMAIL")}>`,
     to: d.to,
     replyTo: replyAddress(),
     subject: d.subject,
-    text: d.body + footer(),
-    headers: {
-      "List-Unsubscribe": `<mailto:${replyAddress()}?subject=unsubscribe>`,
-    },
+    text: d.body,
   });
   if (error) throw new Error(error.message);
   return data!.id;
