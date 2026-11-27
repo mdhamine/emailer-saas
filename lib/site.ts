@@ -25,37 +25,58 @@ async function looksRight(url: string, name: string): Promise<boolean> {
   }
 }
 
-// Search-enabled Groq systems, tried in order. If GROQ_MODEL is set it is tried first.
-// A 404 / model_not_found just moves on to the next candidate.
-const MODEL_CANDIDATES = ["groq/compound", "groq/compound-mini", "compound-beta", "compound-beta-mini"];
-let workingModel: string | null = null; // remembered for the rest of this invocation
-
-async function callGroq(model: string, prompt: string): Promise<Response> {
-  return fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      Authorization: `Bearer ${env("GROQ_API_KEY").trim()}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0,
-    }),
-    signal: AbortSignal.timeout(45_000),
-  });
+// Follow Product Hunt's producthunt.com/r/... redirect by hand to reach the startup's real site.
+async function resolvePhRedirect(url: string): Promise<string | null> {
+  let current = url;
+  for (let i = 0; i < 6; i++) {
+    let host: string;
+    try {
+      host = new URL(current).hostname;
+    } catch {
+      return null;
+    }
+    if (!/(^|\.)producthunt\.com$/i.test(host)) {
+      return NOT_A_HOMEPAGE.test(current) ? null : new URL(current).origin;
+    }
+    try {
+      const r = await fetch(current, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(8000),
+        headers: { "User-Agent": UA, Accept: "text/html" },
+      });
+      const loc = r.headers.get("location");
+      if (!loc) return null;
+      current = new URL(loc, current).toString();
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
-// Groq (OpenAI-compatible API). Free-tier limits are small, so retry politely on 429.
-async function groq(prompt: string): Promise<string> {
-  const candidates = workingModel
-    ? [workingModel]
-    : [...new Set([process.env.GROQ_MODEL, ...MODEL_CANDIDATES].filter(Boolean) as string[])];
+// Groq (OpenAI-compatible API). Plain chat models, tried in order; a 404 moves to the next one.
+// Free-tier limits are small, so retry politely on 429.
+const MODEL_CANDIDATES = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
 
+async function groq(prompt: string): Promise<string> {
+  const candidates = [...new Set([process.env.GROQ_MODEL, ...MODEL_CANDIDATES].filter(Boolean) as string[])];
   let lastError = "no model tried";
+
   for (const model of candidates) {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const res = await callGroq(model, prompt);
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: `Bearer ${env("GROQ_API_KEY").trim()}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0,
+        }),
+        signal: AbortSignal.timeout(45_000),
+      });
       if (res.status === 429 && attempt < 2) {
         await sleep(8000);
         continue;
@@ -66,29 +87,34 @@ async function groq(prompt: string): Promise<string> {
       }
       if (!res.ok) throw new Error(`Groq ${res.status} (${model}): ${(await res.text()).slice(0, 200)}`);
       const data: any = await res.json();
-      workingModel = model;
       return data.choices?.[0]?.message?.content ?? "";
     }
   }
-  throw new Error(`${lastError}. None of these models are available to your Groq key: ${candidates.join(", ")}`);
+  throw new Error(`${lastError}. Tried: ${candidates.join(", ")}`);
 }
 
 export async function findSite(l: Launch): Promise<string | null> {
   const name = l.name.trim();
 
+  // 1) Launch name is already a domain
   if (DOMAIN_NAME.test(name)) {
     const guess = `https://${name}`;
     if (await looksRight(guess, name)) return guess;
   }
 
-  const prompt = `Find the official website (homepage) of this startup, which launched on Product Hunt.
+  // 2) Follow Product Hunt's redirect to the real site (no AI needed)
+  const resolved = await resolvePhRedirect(l.website);
+  if (resolved && (await looksRight(resolved, name))) return resolved;
+
+  // 3) Last resort: ask Groq (no web search, so this is a best guess from memory)
+  const prompt = `What is the official website (homepage) of this startup, which launched on Product Hunt?
 
 Name: ${l.name}
 Tagline: ${l.tagline}
 Description: ${l.description ?? "(none)"}
 
-Search the web. The answer must be the product's own homepage, not Product Hunt, social media, app stores, GitHub, or news articles.
-If you are not confident, answer null.
+The answer must be the product's own homepage, not Product Hunt, social media, app stores, GitHub, or news articles.
+If you are not confident, answer null. Do not invent a URL.
 
 Respond with ONLY this JSON and nothing else: {"url": "https://..." }  or  {"url": null}`;
 
