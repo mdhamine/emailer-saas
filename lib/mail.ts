@@ -37,21 +37,13 @@ export async function sendPitch(d: Draft): Promise<string> {
   return data!.id;
 }
 
-// Dry-run mode: one digest to yourself showing what WOULD be sent (plus debug info).
-export async function sendDigest(drafts: Draft[], debug = ""): Promise<void> {
-  const text = drafts.length
-    ? drafts
-        .map(
-          (d, i) =>
-            `#${i + 1}  ${d.launch.name} (fit ${d.fit_score}/10)\nTo: ${d.to}  [found via ${d.source}]\nPH: ${d.launch.url}\nWhy: ${d.reason}\nSubject: ${d.subject}\n\n${d.body}`,
-        )
-        .join("\n\n==========\n\n")
-    : "No drafts passed the filters today.";
+// Run report: one email to yourself after every run (what was sent, what failed, why things were skipped).
+export async function sendReport(subject: string, text: string): Promise<void> {
   const { error } = await resend.emails.send({
     from: `${env("SENDER_NAME")} <${env("FROM_EMAIL")}>`,
     to: env("OWNER_EMAIL"),
-    subject: `[DRY RUN] ${drafts.length} outreach drafts`,
-    text: text + (debug ? `\n\n--- DEBUG ---\n${debug}` : ""),
+    subject,
+    text,
   });
   if (error) throw new Error(error.message);
 }
