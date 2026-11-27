@@ -171,7 +171,7 @@ export async function findContact(website: string): Promise<Contact | null> {
   // (e.g. a parent company or agency) and it isn't a known third-party service.
   const publishedOffDomain = best.meta.mailto && !THIRD_PARTY.test(bestDomain);
   if (best.score < 10 && !personalOk && !publishedOffDomain) {
-    log(site, `only off-domain emails found (${best.email})`);
+    log(site, `only off-domain emails found (${best.email}, ${best.meta.mailto ? "mailto" : "plain text"} on ${best.meta.page})`);
     return null;
   }
 
