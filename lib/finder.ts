@@ -14,6 +14,9 @@ const BAD_LOCAL =
 const GENERIC = /^(hello|hi|hey|contact|info|support|team|help|sales|admin|office|press|hola)$/i;
 const BAD_DOMAINS = new Set(["example.com", "domain.com", "email.com", "sentry.io", "yourdomain.com", "wixpress.com"]);
 
+const THIRD_PARTY =
+  /(intercom|zendesk|freshdesk|helpscout|stripe|google|apple|microsoft|mailchimp|sendgrid|hubspot|notion|vercel|netlify|cloudflare|wix|squarespace|shopify|wordpress|amazon|aws|sentry|segment|posthog|typeform|calendly)\./i;
+
 export type Contact = { email: string; source: string; text: string };
 
 function log(website: string, reason: string) {
@@ -32,62 +35,23 @@ function stripTracking(u: string): string {
   }
 }
 
-const PH_HOST = /(^|\.)producthunt\.com$/i;
-
-function isPH(u: string): boolean {
-  try {
-    return PH_HOST.test(new URL(u).hostname);
-  } catch {
-    return false;
-  }
-}
-
-// Pull a non-Product-Hunt URL out of a redirect page body (meta refresh, JS redirect, or a plain link).
-function urlFromBody(body: string, base: string): string | null {
-  const patterns = [
-    /http-equiv=["']refresh["'][^>]*content=["'][^"']*url=([^"'>\s]+)/i,
-    /(?:window\.)?location(?:\.href)?\s*=\s*["']([^"']+)["']/i,
-    /location\.replace\(\s*["']([^"']+)["']\s*\)/i,
-    /<a[^>]+href=["'](https?:\/\/[^"']+)["']/i,
-  ];
-  for (const re of patterns) {
-    const m = body.match(re);
-    if (!m) continue;
-    try {
-      const abs = new URL(m[1].replace(/&amp;/g, "&"), base).toString();
-      if (!isPH(abs)) return abs;
-    } catch {
-      /* try next pattern */
-    }
-  }
-  return null;
-}
-
 // Product Hunt gives a producthunt.com/r/... redirect link. Follow the redirect by hand
-// until we reach the startup's real site. Never returns a producthunt.com URL.
-export async function resolveWebsite(url: string): Promise<string | null> {
+// (without loading any PH page) until we reach the startup's real site.
+async function resolveWebsite(url: string): Promise<string | null> {
   let current = url;
-  for (let i = 0; i < 8; i++) {
-    if (!isPH(current)) {
-      try {
-        new URL(current);
-      } catch {
-        return null;
-      }
-      return stripTracking(current);
+  for (let i = 0; i < 6; i++) {
+    let host: string;
+    try {
+      host = new URL(current).hostname;
+    } catch {
+      return null;
     }
+    if (!/(^|\.)producthunt\.com$/.test(host)) return stripTracking(current);
     try {
       const r = await fetch(current, { redirect: "manual", signal: AbortSignal.timeout(8000), headers: HEADERS });
       const loc = r.headers.get("location");
-      if (loc) {
-        current = new URL(loc, current).toString();
-        continue;
-      }
-      // No Location header: the redirect may be done in the HTML body instead.
-      const body = (await r.text()).slice(0, 200_000);
-      const fromBody = urlFromBody(body, current);
-      if (!fromBody) return null;
-      current = fromBody;
+      if (!loc) return null;
+      current = new URL(loc, current).toString();
     } catch {
       return null;
     }
@@ -156,7 +120,7 @@ function extract(html: string, found: Map<string, { mailto: boolean; page: strin
 
 export async function findContact(website: string): Promise<Contact | null> {
   const site = await resolveWebsite(website);
-  if (!site || isPH(site)) {
+  if (!site) {
     log(website, "could not resolve PH redirect to real site");
     return null;
   }
@@ -201,7 +165,12 @@ export async function findContact(website: string): Promise<Contact | null> {
   scored.sort((a, b) => b.score - a.score);
   const best = scored[0];
   // Reject addresses on unrelated domains (e.g. a third-party widget's support address)
-  if (best.score < 10 && !/gmail\.com|outlook\.com|proton\.me|protonmail\.com/.test(best.email)) {
+  const bestDomain = best.email.split("@")[1];
+  const personalOk = /gmail\.com|outlook\.com|proton\.me|protonmail\.com/.test(bestDomain);
+  // An off-domain address is OK only if the site publishes it as a mailto: link
+  // (e.g. a parent company or agency) and it isn't a known third-party service.
+  const publishedOffDomain = best.meta.mailto && !THIRD_PARTY.test(bestDomain);
+  if (best.score < 10 && !personalOk && !publishedOffDomain) {
     log(site, `only off-domain emails found (${best.email})`);
     return null;
   }
