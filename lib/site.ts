@@ -1,7 +1,6 @@
 import type { Launch } from "./producthunt";
 import { env, sleep } from "./util";
 
-
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
@@ -26,35 +25,52 @@ async function looksRight(url: string, name: string): Promise<boolean> {
   }
 }
 
-// Groq (OpenAI-compatible API). The default model has built-in web search.
-// Free-tier limits are small, so retry politely on 429.
-async function groq(prompt: string): Promise<string> {
-  const model = process.env.GROQ_MODEL ?? "groq/compound";
-  const url = "https://api.groq.com/openai/v1/chat/completions";
+// Search-enabled Groq systems, tried in order. If GROQ_MODEL is set it is tried first.
+// A 404 / model_not_found just moves on to the next candidate.
+const MODEL_CANDIDATES = ["groq/compound", "groq/compound-mini", "compound-beta", "compound-beta-mini"];
+let workingModel: string | null = null; // remembered for the rest of this invocation
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        Authorization: `Bearer ${env("GROQ_API_KEY").trim()}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0,
-      }),
-      signal: AbortSignal.timeout(45_000),
-    });
-    if (res.status === 429 && attempt < 2) {
-      await sleep(8000);
-      continue;
+async function callGroq(model: string, prompt: string): Promise<Response> {
+  return fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${env("GROQ_API_KEY").trim()}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0,
+    }),
+    signal: AbortSignal.timeout(45_000),
+  });
+}
+
+// Groq (OpenAI-compatible API). Free-tier limits are small, so retry politely on 429.
+async function groq(prompt: string): Promise<string> {
+  const candidates = workingModel
+    ? [workingModel]
+    : [...new Set([process.env.GROQ_MODEL, ...MODEL_CANDIDATES].filter(Boolean) as string[])];
+
+  let lastError = "no model tried";
+  for (const model of candidates) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await callGroq(model, prompt);
+      if (res.status === 429 && attempt < 2) {
+        await sleep(8000);
+        continue;
+      }
+      if (res.status === 404) {
+        lastError = `Groq 404 for model ${model}: ${(await res.text()).slice(0, 200)}`;
+        break; // try next candidate model
+      }
+      if (!res.ok) throw new Error(`Groq ${res.status} (${model}): ${(await res.text()).slice(0, 200)}`);
+      const data: any = await res.json();
+      workingModel = model;
+      return data.choices?.[0]?.message?.content ?? "";
     }
-    if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    const data: any = await res.json();
-    return data.choices?.[0]?.message?.content ?? "";
   }
-  throw new Error("Groq rate limited (429)");
+  throw new Error(`${lastError}. None of these models are available to your Groq key: ${candidates.join(", ")}`);
 }
 
 export async function findSite(l: Launch): Promise<string | null> {
