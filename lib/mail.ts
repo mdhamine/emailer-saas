@@ -37,8 +37,8 @@ export async function sendPitch(d: Draft): Promise<string> {
   return data!.id;
 }
 
-// Dry-run mode: one digest to yourself showing what WOULD be sent.
-export async function sendDigest(drafts: Draft[]): Promise<void> {
+// Dry-run mode: one digest to yourself showing what WOULD be sent (plus debug info).
+export async function sendDigest(drafts: Draft[], debug = ""): Promise<void> {
   const text = drafts.length
     ? drafts
         .map(
@@ -51,7 +51,7 @@ export async function sendDigest(drafts: Draft[]): Promise<void> {
     from: `${env("SENDER_NAME")} <${env("FROM_EMAIL")}>`,
     to: env("OWNER_EMAIL"),
     subject: `[DRY RUN] ${drafts.length} outreach drafts`,
-    text,
+    text: text + (debug ? `\n\n--- DEBUG ---\n${debug}` : ""),
   });
   if (error) throw new Error(error.message);
 }
