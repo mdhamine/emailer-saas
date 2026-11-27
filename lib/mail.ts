@@ -1,6 +1,7 @@
 import { Resend } from "resend";
 import type { Launch } from "./producthunt";
 import { env } from "./util";
+import { markEmailed } from "./dedupe";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -27,6 +28,7 @@ export async function sendPitch(d: Draft): Promise<string> {
     text: d.body,
   });
   if (error) throw new Error(error.message);
+  markEmailed(d.to); // record only after Resend accepts the email
   return data!.id;
 }
 
