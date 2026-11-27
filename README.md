@@ -4,6 +4,7 @@ Daily: fetch yesterday's PH launches -> scrape site for contact email -> Claude 
 red.
 
 ## Deploy
+
 1. `npm i`, `vercel link`
 2. Add every variable from `.env.example` in Vercel > Settings > Environment Variables.
 3. `vercel --prod`
