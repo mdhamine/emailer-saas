@@ -1,5 +1,6 @@
 import { fetchLaunches, dayWindow, type Launch } from "../lib/producthunt";
 import { findContact } from "../lib/finder";
+import { findSite } from "../lib/site";
 import { writePitch } from "../lib/pitch";
 import { sendPitch, sendDigest, type Draft } from "../lib/mail";
 import { isBlocked, sleep } from "../lib/util";
@@ -24,7 +25,9 @@ async function pool<T, R>(items: T[], size: number, fn: (x: T) => Promise<R>): P
 
 async function prepare(l: Launch): Promise<{ draft?: Draft; skip?: string }> {
   try {
-    const contact = await findContact(l.website);
+    const site = await findSite(l);
+    if (!site) return { skip: "no_site" };
+    const contact = await findContact(site);
     if (!contact) return { skip: "no_email" };
     const email = contact.email.toLowerCase();
     if (isBlocked(email)) return { skip: "blocklisted" };
@@ -44,8 +47,8 @@ export async function GET(req: Request): Promise<Response> {
   // Optional ?date=YYYY-MM-DD to run a specific UTC day (handy for testing)
   const date = new URL(req.url).searchParams.get("date") ?? undefined;
   const window = dayWindow(date);
-  const launches = await fetchLaunches(window, 40);
-  const results = await pool(launches, 4, prepare);
+  const launches = await fetchLaunches(window, Number(process.env.LAUNCH_COUNT ?? 20));
+  const results = await pool(launches, 2, prepare); // low concurrency keeps free-tier API limits happy
 
   const skips: Record<string, number> = {};
   const errors: string[] = [];
@@ -70,7 +73,23 @@ export async function GET(req: Request): Promise<Response> {
 
   let sent = 0;
   if (DRY_RUN) {
-    await sendDigest(batch);
+    const debug = JSON.stringify(
+      {
+        window,
+        launches: launches.length,
+        drafted: drafts.length,
+        skips,
+        errors: [...new Set(errors)].slice(0, 5),
+        details: results.slice(0, 10).map((r, i) => ({
+          name: launches[i].name,
+          website: launches[i].website,
+          result: r.draft ? `drafted:${r.draft.to}` : r.skip,
+        })),
+      },
+      null,
+      2,
+    );
+    await sendDigest(batch, debug);
   } else {
     for (const d of batch) {
       try {
@@ -84,5 +103,19 @@ export async function GET(req: Request): Promise<Response> {
     }
   }
 
-  return Response.json({ window, dryRun: DRY_RUN, launches: launches.length, drafted: drafts.length, sent, skips, errors });
+  return Response.json({
+    window,
+    dryRun: DRY_RUN,
+    launches: launches.length,
+    drafted: drafts.length,
+    sent,
+    skips,
+    errors: [...new Set(errors)].slice(0, 5),
+    // First 10 launches with what happened to each (visible only to whoever has CRON_SECRET)
+    details: results.slice(0, 10).map((r, i) => ({
+      name: launches[i].name,
+      website: launches[i].website,
+      result: r.draft ? `drafted:${r.draft.to}` : r.skip,
+    })),
+  });
 }
