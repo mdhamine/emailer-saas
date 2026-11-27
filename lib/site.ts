@@ -54,9 +54,11 @@ async function resolvePhRedirect(url: string): Promise<string | null> {
   return null;
 }
 
-// Groq (OpenAI-compatible API). Plain chat models, tried in order; a 404 moves to the next one.
+// Groq (OpenAI-compatible API). Chat models tried in order; a 404 moves to the next one.
+// llama-3.3-70b-versatile and llama-3.1-8b-instant were shut down on 2026-08-16.
+// Set GROQ_MODEL in the environment to override the first choice without a redeploy of code.
 // Free-tier limits are small, so retry politely on 429.
-const MODEL_CANDIDATES = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+const MODEL_CANDIDATES = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"];
 
 async function groq(prompt: string): Promise<string> {
   const candidates = [...new Set([process.env.GROQ_MODEL, ...MODEL_CANDIDATES].filter(Boolean) as string[])];
@@ -118,7 +120,14 @@ If you are not confident, answer null. Do not invent a URL.
 
 Respond with ONLY this JSON and nothing else: {"url": "https://..." }  or  {"url": null}`;
 
-  const text = await groq(prompt);
+  let text: string;
+  try {
+    text = await groq(prompt);
+  } catch (e) {
+    // Groq is only a best-guess fallback; don't fail the whole launch if it is down or a model is retired.
+    console.error("groq fallback failed:", (e as Error).message);
+    return null;
+  }
   const m = text.match(/\{[\s\S]*?\}/);
   if (!m) return null;
 
