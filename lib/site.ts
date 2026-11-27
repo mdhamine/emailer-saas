@@ -27,7 +27,7 @@ async function looksRight(url: string, name: string): Promise<boolean> {
 
 // Gemini with Google Search grounding. Free-tier limits are small, so retry politely on 429.
 async function gemini(prompt: string): Promise<string> {
-  const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+  const model = process.env.GEMINI_MODEL ?? "gemini-3.8-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
   for (let attempt = 0; attempt < 3; attempt++) {
