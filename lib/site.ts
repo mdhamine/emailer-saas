@@ -25,18 +25,23 @@ async function looksRight(url: string, name: string): Promise<boolean> {
   }
 }
 
-// Gemini with Google Search grounding. Free-tier limits are small, so retry politely on 429.
-async function gemini(prompt: string): Promise<string> {
-  const model = process.env.GEMINI_MODEL ?? "gemini-3.8-flash";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+// Groq (OpenAI-compatible API). The default model has built-in web search.
+// Free-tier limits are small, so retry politely on 429.
+async function groq(prompt: string): Promise<string> {
+  const model = process.env.GROQ_MODEL ?? "groq/compound";
+  const url = "https://api.groq.com/openai/v1/chat/completions";
 
   for (let attempt = 0; attempt < 3; attempt++) {
     const res = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": env("GEMINI_API_KEY") },
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${env("GROQ_API_KEY").trim()}`,
+      },
       body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
+        model,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0,
       }),
       signal: AbortSignal.timeout(45_000),
     });
@@ -44,11 +49,11 @@ async function gemini(prompt: string): Promise<string> {
       await sleep(8000);
       continue;
     }
-    if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text()).slice(0, 200)}`);
     const data: any = await res.json();
-    return (data.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("");
+    return data.choices?.[0]?.message?.content ?? "";
   }
-  throw new Error("Gemini rate limited (429)");
+  throw new Error("Groq rate limited (429)");
 }
 
 export async function findSite(l: Launch): Promise<string | null> {
@@ -65,12 +70,12 @@ Name: ${l.name}
 Tagline: ${l.tagline}
 Description: ${l.description ?? "(none)"}
 
-Use Google Search. The answer must be the product's own homepage, not Product Hunt, social media, app stores, GitHub, or news articles.
+Search the web. The answer must be the product's own homepage, not Product Hunt, social media, app stores, GitHub, or news articles.
 If you are not confident, answer null.
 
 Respond with ONLY this JSON and nothing else: {"url": "https://..." }  or  {"url": null}`;
 
-  const text = await gemini(prompt);
+  const text = await groq(prompt);
   const m = text.match(/\{[\s\S]*?\}/);
   if (!m) return null;
 
